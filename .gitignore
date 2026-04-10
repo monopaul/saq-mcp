@@ -1,0 +1,12 @@
+node_modules/
+dist/
+
+# Runtime data — contains your API key and personal location filter
+~/.saq-mcp/
+*.credentials.json
+
+# macOS
+.DS_Store
+
+# Generated plist (contains local absolute paths)
+com.saq-mcp.watcher.plist

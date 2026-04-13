@@ -111,7 +111,9 @@ export interface RestockEvent {
   isNewArrival?: true;
 }
 
-/** Diff for an individually watched product (has full store ID list). */
+/** Diff for an individually watched product (has full store ID list).
+ *  Only fires when a product becomes newly available (0 → ≥1 stores),
+ *  not when it merely gains more stores where it was already stocked. */
 export function detectRestock(
   watched: WatchedProduct,
   currentStoreIds: string[],
@@ -124,7 +126,9 @@ export function detectRestock(
     currentAvailability,
   );
 
-  if (newStoreIds.length === 0 && !isPositiveAvailChange) return null;
+  // Only alert when going from no local stores → at least one local store
+  const isFirstAvailability = watched.storeSnapshot.length === 0 && currentStoreIds.length > 0;
+  if (!isFirstAvailability && !isPositiveAvailChange) return null;
 
   return {
     sku: watched.sku,
@@ -142,7 +146,9 @@ export function detectRestock(
 }
 
 /** Diff for a catalog-scan entry (only has store count, not full ID list).
- *  When a location filter was active at both scan times, uses localStoreCount. */
+ *  When a location filter was active at both scan times, uses localStoreCount.
+ *  Only fires when a product becomes newly available (0 → ≥1 stores in the
+ *  relevant scope), not on simple count increases where it was already stocked. */
 export function detectRestockFromCatalog(
   sku: string,
   prev: CatalogEntry,
@@ -152,10 +158,11 @@ export function detectRestockFromCatalog(
   // Choose which count to compare based on whether we're in geo-filtered mode
   const prevCount = geoFiltered ? (prev.localStoreCount ?? prev.storeCount) : prev.storeCount;
   const currCount = geoFiltered ? (current.localStoreCount ?? current.storeCount) : current.storeCount;
-  const storeGain = currCount - prevCount;
   const isPositiveAvailChange = isAvailabilityImprovement(prev.availability, current.availability);
 
-  if (storeGain <= 0 && !isPositiveAvailChange) return null;
+  // Only alert when going from no stores → at least one store (in the relevant scope)
+  const isFirstAvailability = prevCount === 0 && currCount > 0;
+  if (!isFirstAvailability && !isPositiveAvailChange) return null;
 
   return {
     sku,

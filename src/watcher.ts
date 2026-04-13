@@ -18,6 +18,7 @@ import { execSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import * as nodemailer from 'nodemailer';
 import { extractCredentials } from './credentials.js';
 import { SaqClient } from './saq-client.js';
 import { getStoreDirectory, getLocalStoreIds } from './stores.js';
@@ -52,9 +53,45 @@ function sendNotification(title: string, body: string): void {
   } catch {}
 }
 
+// ── Email notifications ───────────────────────────────────────────────────────
+
+interface EmailConfig {
+  to: string;
+  from: string;
+  smtp: { host: string; port: number; user: string; pass: string };
+}
+
+const EMAIL_CONFIG_PATH = path.join(os.homedir(), '.saq-mcp', 'email.json');
+
+function loadEmailConfig(): EmailConfig | null {
+  try {
+    if (fs.existsSync(EMAIL_CONFIG_PATH)) {
+      return JSON.parse(fs.readFileSync(EMAIL_CONFIG_PATH, 'utf-8')) as EmailConfig;
+    }
+  } catch {}
+  return null;
+}
+
+async function sendEmail(subject: string, html: string): Promise<void> {
+  const cfg = loadEmailConfig();
+  if (!cfg) return;
+  try {
+    const transporter = nodemailer.createTransport({
+      host: cfg.smtp.host,
+      port: cfg.smtp.port,
+      secure: cfg.smtp.port === 465,
+      auth: { user: cfg.smtp.user, pass: cfg.smtp.pass },
+    });
+    await transporter.sendMail({ from: cfg.from, to: cfg.to, subject, html });
+    log(`  [email] Sent: ${subject}`);
+  } catch (err) {
+    log(`  [email] Failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 function printRestock(r: RestockEvent, geoLabel?: string): void {
   const scope = geoLabel ? ` [within ${geoLabel}]` : '';
-  const tag = r.isNewArrival ? '[NEW ARRIVAL]' : '[RESTOCK]';
+  const tag = r.isNewArrival ? '[NEW ARRIVAL]' : '[NOW AVAILABLE]';
   const storeInfo = r.isNewArrival
     ? `${r.currentStoreCount} store${r.currentStoreCount !== 1 ? 's' : ''}${scope} · ${r.currentAvailability}`
     : r.newStoreIds.length > 0
@@ -113,12 +150,12 @@ async function checkIndividual(
 
       if (event) {
         restocks.push(event);
-        log(`  [RESTOCK] ${product.name} — +${event.newStoreIds.length} stores${geoLabel ? ` near ${geoLabel}` : ''}`);
+        log(`  [NOW AVAILABLE] ${product.name} — ${event.currentStoreCount} store(s)${geoLabel ? ` near ${geoLabel}` : ''}`);
         if (notify) {
           const storeStr = localStoreIds
-            ? `+${event.newStoreIds.length} local stores (${event.currentStoreCount} within ${geoLabel})`
-            : `+${event.newStoreIds.length} stores (${event.currentStoreCount} total)`;
-          sendNotification(`SAQ Restock: ${event.name}`, `${storeStr} · $${event.price.toFixed(2)}`);
+            ? `${event.currentStoreCount} store(s) within ${geoLabel}`
+            : `${event.currentStoreCount} store(s) across Québec`;
+          sendNotification(`SAQ Now Available: ${event.name}`, `${storeStr} · $${event.price.toFixed(2)}`);
         }
       } else {
         log(`  [OK] ${product.name} — ${currentStoreIds.length} stores${localStoreIds ? ' locally' : ''}`);
@@ -314,25 +351,54 @@ async function scanCatalog(
       );
     }
 
-    // Restocks notification
+    // Now-available notification (products that went from 0 stores → in stock)
     if (restocks.length === 1) {
       const r = restocks[0];
       sendNotification(
-        `SAQ Restock: ${r.name}`,
-        `${r.previousStoreCount} → ${r.currentStoreCount} stores · $${r.price.toFixed(2)}`,
+        `SAQ Now Available: ${r.name}`,
+        `${r.currentStoreCount} store${r.currentStoreCount !== 1 ? 's' : ''} · $${r.price.toFixed(2)}`,
       );
     } else if (restocks.length > 1) {
       sendNotification(
-        `SAQ: ${restocks.length} restocks detected`,
+        `SAQ: ${restocks.length} products now available`,
         restocks.slice(0, 3).map((r) => r.name).join(', ') +
           (restocks.length > 3 ? ` +${restocks.length - 3} more` : ''),
       );
     }
   }
 
-  return [...newArrivals, ...restocks];
+  // Email notifications (sent whenever email.json is configured, regardless of --notify flag)
+  const geoLabel = localStoreIds ? ` within ${currentFilterKey ? '100 km of Montréal' : 'your area'}` : '';
+  if (newArrivals.length > 0) {
+    const rows = newArrivals.map((r) =>
+      `<tr><td><a href="${r.url}">${r.name}</a></td><td>$${r.price.toFixed(2)}</td>` +
+      `<td>${r.currentStoreCount} store${r.currentStoreCount !== 1 ? 's' : ''}${geoLabel}</td>` +
+      `<td>${r.currentAvailability}</td></tr>`,
+    ).join('');
+    await sendEmail(
+      `SAQ: ${newArrivals.length} new arrival${newArrivals.length !== 1 ? 's' : ''}`,
+      `<h2>🍷 ${newArrivals.length} new arrival${newArrivals.length !== 1 ? 's' : ''} at SAQ</h2>` +
+      `<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-family:sans-serif">` +
+      `<thead><tr><th>Product</th><th>Price</th><th>Stores</th><th>Availability</th></tr></thead>` +
+      `<tbody>${rows}</tbody></table>`,
+    );
+  }
+  if (restocks.length > 0) {
+    const rows = restocks.map((r) =>
+      `<tr><td><a href="${r.url}">${r.name}</a></td><td>$${r.price.toFixed(2)}</td>` +
+      `<td>${r.currentStoreCount} store${r.currentStoreCount !== 1 ? 's' : ''}${geoLabel}</td>` +
+      `<td>${r.currentAvailability}</td></tr>`,
+    ).join('');
+    await sendEmail(
+      `SAQ: ${restocks.length} product${restocks.length !== 1 ? 's' : ''} now available`,
+      `<h2>📦 ${restocks.length} product${restocks.length !== 1 ? 's' : ''} now available at SAQ</h2>` +
+      `<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-family:sans-serif">` +
+      `<thead><tr><th>Product</th><th>Price</th><th>Stores</th><th>Availability</th></tr></thead>` +
+      `<tbody>${rows}</tbody></table>`,
+    );
+  }
 
-  return restocks;
+  return [...newArrivals, ...restocks];
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -378,7 +444,7 @@ async function runCheck(notify: boolean): Promise<void> {
       arrivals.forEach((r) => printRestock(r, wl.locationFilter?.label));
     }
     if (restocks.length > 0) {
-      process.stdout.write(`\n=== ${restocks.length} RESTOCK(S) ===\n`);
+      process.stdout.write(`\n=== ${restocks.length} NOW AVAILABLE ===\n`);
       restocks.forEach((r) => printRestock(r, wl.locationFilter?.label));
     }
   } else {

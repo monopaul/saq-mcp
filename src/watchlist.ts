@@ -190,17 +190,8 @@ export function detectRestockFromCatalog(
   };
 }
 
-/**
- * Maximum global store count for a product to be considered a genuine new arrival.
- * Products already in many stores across Québec are clearly established — if they're
- * missing from the previous snapshot it's a data artifact (baseline rebuild, missed chunk),
- * not a real new release. SAQ typically launches new products in 1–15 stores initially.
- */
-const NEW_ARRIVAL_MAX_GLOBAL_STORES = 20;
-
 /** Detect a brand-new product (no previous snapshot entry) that is already in-store or online.
- *  In geo-filtered mode, requires at least one local store — unless it's online-only.
- *  Products already distributed across many stores are suppressed (snapshot artifact guard). */
+ *  In geo-filtered mode, requires at least one local store — unless it's online-only. */
 export function detectNewArrival(
   sku: string,
   current: CatalogEntry,
@@ -209,10 +200,6 @@ export function detectNewArrival(
   const isAvailable =
     current.availability.includes('In store') || current.availability.includes('Online');
   if (!isAvailable) return null;
-
-  // If the product is already in many stores across Québec it's not a genuine new arrival —
-  // it was simply missing from the previous snapshot (e.g. after a baseline rebuild).
-  if (current.storeCount > NEW_ARRIVAL_MAX_GLOBAL_STORES) return null;
 
   const currCount = geoFiltered
     ? (current.localStoreCount ?? current.storeCount)

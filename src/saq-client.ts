@@ -32,7 +32,7 @@ const AVAILABLE_NOW = ['Online', 'In store', 'In a lottery'];
 // Category path format: "products/wine/red-wine"
 const CATEGORY_PATHS: Record<ProductCategory, string> = {
   wine: 'products/wine',
-  spirits: 'products/spirits',
+  spirits: 'products/spirit',
   beer: 'products/beer',
   'champagne-and-sparkling-wine': 'products/champagne-and-sparkling-wine',
   cider: 'products/cider',
@@ -326,7 +326,7 @@ export class SaqClient {
       // Default: only show items that can be purchased or viewed
       filter.push({
         attribute: 'availability_front',
-        in: [...AVAILABLE_NOW, 'Available shortly', 'In a lottery shortly'],
+        in: [...AVAILABLE_NOW, 'In a lottery shortly'],
       });
     }
 

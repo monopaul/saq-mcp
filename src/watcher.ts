@@ -183,7 +183,9 @@ async function checkIndividual(
 const ALL_CATEGORIES: ProductCategory[] = [
   'wine', 'spirits', 'beer', 'champagne-and-sparkling-wine',
   'cider', 'sake', 'aperitif', 'port-and-fortified-wine',
-  'dessert-wine', 'non-alcoholic',
+  'dessert-wine',
+  // Note: 'non-alcoholic' is NOT a real SAQ categoryPath — the website shows a filtered
+  // view by low ABV across categories. Those products are already captured under beer/wine/etc.
 ];
 
 // All wine-producing countries found in SAQ's catalog (except France which gets its own chunk).
@@ -298,10 +300,36 @@ async function scanCatalog(
     if (count > 0) {
       Object.assign(newEntries, entries);
       log(`  [${category}] ${count} products`);
+    } else {
+      log(`  [${category}] WARNING: 0 products returned — API may have failed for this category`);
     }
   }
 
-  log(`  Total: ${Object.keys(newEntries).length} unique products`);
+  log(`  Total from API: ${Object.keys(newEntries).length} unique products`);
+
+  // ── Carry-forward guard ──────────────────────────────────────────────────────
+  // The SAQ API returns inconsistent product counts between runs — some products
+  // are silently omitted on certain days (total_pages drifts). If we blindly replace
+  // the snapshot with whatever the API returned today, those missing products
+  // disappear from our baseline and reappear as "new arrivals" the next day.
+  // Fix: carry forward any product the scan missed, preserving its last-known state.
+  // This is safe because the detection logic requires prev availability rank > 0 to fire,
+  // so carried-forward products won't produce false alerts unless they genuinely restock.
+  // (Filter changes are excluded: local counts would be stale under a new filter.)
+  if (prevSnapshot && !isFirstRun && !filterChanged) {
+    let carriedForward = 0;
+    for (const [sku, prevEntry] of Object.entries(prevSnapshot.entries)) {
+      if (!newEntries[sku]) {
+        newEntries[sku] = prevEntry;
+        carriedForward++;
+      }
+    }
+    if (carriedForward > 0) {
+      log(`  Carried forward ${carriedForward} products not seen this scan (API jitter guard)`);
+    }
+  }
+
+  log(`  Total in snapshot: ${Object.keys(newEntries).length} unique products`);
 
   const newSnapshot: CatalogSnapshot = {
     scannedAt: new Date().toISOString(),

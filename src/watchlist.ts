@@ -147,8 +147,15 @@ export function detectRestock(
 
 /** Diff for a catalog-scan entry (only has store count, not full ID list).
  *  When a location filter was active at both scan times, uses localStoreCount.
- *  Only fires when a product becomes newly available (0 → ≥1 stores in the
- *  relevant scope), not on simple count increases where it was already stocked. */
+ *
+ *  Fires only when the product was genuinely unavailable before — meaning:
+ *  - rank 0 availability (sold out / unavailable everywhere, NOT online) AND
+ *  - 0 stores in the relevant scope
+ *  AND is now actually available (rank > 0).
+ *
+ *  This prevents false alerts for:
+ *  - Products "available online" that gain local stores (still available, just more so)
+ *  - Products the API marks "Unavailable" but happens to carry store IDs */
 export function detectRestockFromCatalog(
   sku: string,
   prev: CatalogEntry,
@@ -160,8 +167,12 @@ export function detectRestockFromCatalog(
   const currCount = geoFiltered ? (current.localStoreCount ?? current.storeCount) : current.storeCount;
   const isPositiveAvailChange = isAvailabilityImprovement(prev.availability, current.availability);
 
-  // Only alert when going from no stores → at least one store (in the relevant scope)
-  const isFirstAvailability = prevCount === 0 && currCount > 0;
+  // Product must have been genuinely unavailable (rank 0 = sold out / truly unavailable, not online)
+  // AND had no stores in scope, AND must now be actually available (rank > 0)
+  const wasGenuinelyUnavailable = prevCount === 0 && availabilityRank(prev.availability) === 0;
+  const isNowAvailable = currCount > 0 && availabilityRank(current.availability) > 0;
+  const isFirstAvailability = wasGenuinelyUnavailable && isNowAvailable;
+
   if (!isFirstAvailability && !isPositiveAvailChange) return null;
 
   return {
@@ -179,8 +190,17 @@ export function detectRestockFromCatalog(
   };
 }
 
+/**
+ * Maximum global store count for a product to be considered a genuine new arrival.
+ * Products already in many stores across Québec are clearly established — if they're
+ * missing from the previous snapshot it's a data artifact (baseline rebuild, missed chunk),
+ * not a real new release. SAQ typically launches new products in 1–15 stores initially.
+ */
+const NEW_ARRIVAL_MAX_GLOBAL_STORES = 20;
+
 /** Detect a brand-new product (no previous snapshot entry) that is already in-store or online.
- *  In geo-filtered mode, requires at least one local store — unless it's online-only. */
+ *  In geo-filtered mode, requires at least one local store — unless it's online-only.
+ *  Products already distributed across many stores are suppressed (snapshot artifact guard). */
 export function detectNewArrival(
   sku: string,
   current: CatalogEntry,
@@ -189,6 +209,10 @@ export function detectNewArrival(
   const isAvailable =
     current.availability.includes('In store') || current.availability.includes('Online');
   if (!isAvailable) return null;
+
+  // If the product is already in many stores across Québec it's not a genuine new arrival —
+  // it was simply missing from the previous snapshot (e.g. after a baseline rebuild).
+  if (current.storeCount > NEW_ARRIVAL_MAX_GLOBAL_STORES) return null;
 
   const currCount = geoFiltered
     ? (current.localStoreCount ?? current.storeCount)
@@ -213,14 +237,16 @@ export function detectNewArrival(
   };
 }
 
+/** Availability rank: 3 = in store / online, 2 = coming soon, 1 = lottery, 0 = unavailable/sold out */
+export function availabilityRank(a: string): number {
+  if (a.includes('Online') || a.includes('In store')) return 3;
+  if (a.includes('shortly') || a.includes('Available')) return 2;
+  if (a.includes('lottery') || a.includes('Lottery')) return 1;
+  return 0;
+}
+
 export function isAvailabilityImprovement(prev: string, curr: string): boolean {
-  const rank = (a: string): number => {
-    if (a.includes('Online') || a.includes('In store')) return 3;
-    if (a.includes('shortly') || a.includes('Available')) return 2;
-    if (a.includes('lottery') || a.includes('Lottery')) return 1;
-    return 0;
-  };
-  return rank(curr) > rank(prev);
+  return availabilityRank(curr) > availabilityRank(prev);
 }
 
 function ensureDataDir(): void {

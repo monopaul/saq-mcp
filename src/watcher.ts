@@ -369,29 +369,17 @@ async function scanCatalog(
 
   // Email notifications (sent whenever email.json is configured, regardless of --notify flag)
   const geoLabel = localStoreIds ? ` within ${currentFilterKey ? '100 km of Montréal' : 'your area'}` : '';
-  if (newArrivals.length > 0) {
-    const rows = newArrivals.map((r) =>
+
+  const emailItems = [...restocks, ...newArrivals];
+  if (emailItems.length > 0) {
+    const rows = emailItems.sort((a, b) => b.price - a.price).map((r) =>
       `<tr><td><a href="${r.url}">${r.name}</a></td><td>$${r.price.toFixed(2)}</td>` +
       `<td>${r.currentStoreCount} store${r.currentStoreCount !== 1 ? 's' : ''}${geoLabel}</td>` +
       `<td>${r.currentAvailability}</td></tr>`,
     ).join('');
     await sendEmail(
-      `SAQ: ${newArrivals.length} new arrival${newArrivals.length !== 1 ? 's' : ''}`,
-      `<h2>🍷 ${newArrivals.length} new arrival${newArrivals.length !== 1 ? 's' : ''} at SAQ</h2>` +
-      `<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-family:sans-serif">` +
-      `<thead><tr><th>Product</th><th>Price</th><th>Stores</th><th>Availability</th></tr></thead>` +
-      `<tbody>${rows}</tbody></table>`,
-    );
-  }
-  if (restocks.length > 0) {
-    const rows = restocks.map((r) =>
-      `<tr><td><a href="${r.url}">${r.name}</a></td><td>$${r.price.toFixed(2)}</td>` +
-      `<td>${r.currentStoreCount} store${r.currentStoreCount !== 1 ? 's' : ''}${geoLabel}</td>` +
-      `<td>${r.currentAvailability}</td></tr>`,
-    ).join('');
-    await sendEmail(
-      `SAQ: ${restocks.length} product${restocks.length !== 1 ? 's' : ''} now available`,
-      `<h2>📦 ${restocks.length} product${restocks.length !== 1 ? 's' : ''} now available at SAQ</h2>` +
+      `SAQ: ${emailItems.length} product${emailItems.length !== 1 ? 's' : ''} now available`,
+      `<h2>📦 ${emailItems.length} product${emailItems.length !== 1 ? 's' : ''} now available at SAQ</h2>` +
       `<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-family:sans-serif">` +
       `<thead><tr><th>Product</th><th>Price</th><th>Stores</th><th>Availability</th></tr></thead>` +
       `<tbody>${rows}</tbody></table>`,

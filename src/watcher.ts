@@ -105,8 +105,113 @@ function categorizeEvent(r: RestockEvent): EmailCategory {
   return 'misc';
 }
 
+// Accent colour per category — used for section header background and card left border
+const CATEGORY_ACCENT: Record<EmailCategory, string> = {
+  veryHighValue:         '#9A7D0A',  // dark gold
+  sparklingAndChampagne: '#6C3483',  // grape purple
+  redWine:               '#7B1B1B',  // deep burgundy
+  whiteWine:             '#7D6608',  // amber-gold
+  roseWine:              '#B03A6A',  // raspberry
+  otherWine:             '#5D4037',  // earthy brown
+  spirits:               '#37474F',  // slate
+  beerAndCider:          '#9A6B00',  // amber
+  misc:                  '#546E7A',  // blue-grey
+};
+
+/** Render a coloured availability pill. */
+function availBadge(avail: string): string {
+  let bg: string; let fg: string; let text: string;
+  if (avail.includes('Online') && avail.includes('In store')) {
+    bg = '#E8F5E9'; fg = '#1B5E20'; text = 'Online &amp; In store';
+  } else if (avail.includes('In store')) {
+    bg = '#E8F5E9'; fg = '#1B5E20'; text = 'In store';
+  } else if (avail.includes('Online')) {
+    bg = '#E3F2FD'; fg = '#0D47A1'; text = 'Online';
+  } else if (avail.includes('shortly')) {
+    bg = '#FFF3E0'; fg = '#E65100'; text = 'Coming soon';
+  } else if (avail.includes('lottery') || avail.includes('Lottery')) {
+    bg = '#EDE7F6'; fg = '#4A148C'; text = 'Lottery';
+  } else {
+    bg = '#F5F5F5'; fg = '#757575'; text = avail.split(',')[0];
+  }
+  return `<span style="display:inline-block;background:${bg};color:${fg};font-size:10px;font-weight:700;` +
+         `padding:3px 8px;border-radius:4px;letter-spacing:0.3px;white-space:nowrap">${text}</span>`;
+}
+
+/** Render a rating as star glyphs + score. Returns '' if no rating. */
+function ratingHtml(rating: number | undefined, count: number | undefined): string {
+  if (!rating) return '';
+  const full  = Math.min(5, Math.round(rating));
+  const stars = '★'.repeat(full) + '☆'.repeat(5 - full);
+  const score = rating.toFixed(1);
+  const cnt   = count ? ` (${count})` : '';
+  return `<span style="color:#B8860B;font-size:12px">${stars}</span>` +
+         `<span style="color:#888;font-size:11px"> ${score}${cnt}</span>`;
+}
+
+/** Render one product card as a table row. */
+function renderCard(r: RestockEvent, accent: string, geoLabel: string): string {
+  // ── Tag pill ────────────────────────────────────────────────────────────────
+  const tagBg   = r.isNewArrival ? '#4A235A' : '#1A5C38';
+  const tagText = r.isNewArrival ? 'NEW ARRIVAL' : 'NOW AVAILABLE';
+  const tag = `<span style="background:${tagBg};color:#fff;font-size:9px;font-weight:800;` +
+              `padding:2px 7px;border-radius:3px;letter-spacing:0.8px">${tagText}</span>`;
+
+  // ── Name + vintage ──────────────────────────────────────────────────────────
+  const nameYear = r.vintage ? `${r.name} <span style="color:#888;font-weight:400">${r.vintage}</span>` : r.name;
+  const nameHtml = `<a href="${r.url}" style="color:#7B1B1B;text-decoration:none;font-size:14px;font-weight:700">${nameYear}</a>`;
+
+  // ── Metadata line 1: producer · region · country ───────────────────────────
+  const meta1Parts = [r.producer, r.region, r.country].filter(Boolean);
+  const meta1 = meta1Parts.length
+    ? `<div style="color:#7A6A6A;font-size:12px;margin-top:3px">${meta1Parts.join(' &nbsp;·&nbsp; ')}</div>`
+    : '';
+
+  // ── Metadata line 2: grape · format · rating ───────────────────────────────
+  const meta2Parts: string[] = [];
+  if (r.grape)  meta2Parts.push(r.grape);
+  if (r.format) meta2Parts.push(r.format);
+  const meta2Text = meta2Parts.join(' &nbsp;·&nbsp; ');
+  const ratingStr = ratingHtml(r.rating, r.ratingCount);
+  const meta2 = (meta2Text || ratingStr)
+    ? `<div style="color:#999;font-size:11px;margin-top:2px">${[meta2Text, ratingStr].filter(Boolean).join(' &nbsp;&nbsp; ')}</div>`
+    : '';
+
+  // ── Price ───────────────────────────────────────────────────────────────────
+  const price = `<div style="font-size:22px;font-weight:800;color:#7B1B1B;line-height:1.1">$${r.price.toFixed(2)}</div>`;
+
+  // ── Store count ─────────────────────────────────────────────────────────────
+  const storeStr = r.currentStoreCount > 0
+    ? `${r.currentStoreCount} store${r.currentStoreCount !== 1 ? 's' : ''}${geoLabel}`
+    : 'Online only';
+  const stores = `<div style="font-size:11px;color:#888;margin-top:4px">${storeStr}</div>`;
+
+  // ── Link ────────────────────────────────────────────────────────────────────
+  const link = `<a href="${r.url}" style="font-size:11px;color:#7B1B1B;text-decoration:none">→ View on SAQ.com</a>`;
+
+  return `<tr>
+  <td style="border-left:4px solid ${accent};background:#fff;padding:12px 16px 8px;border-bottom:1px solid #F0E8E8">
+    <table width="100%" cellpadding="0" cellspacing="0">
+      <tr>
+        <td style="vertical-align:top;padding-right:12px">
+          <div style="margin-bottom:5px">${tag}</div>
+          <div style="margin-bottom:2px">${nameHtml}</div>
+          ${meta1}${meta2}
+          <div style="margin-top:7px">${link}</div>
+        </td>
+        <td width="130" style="vertical-align:top;text-align:right;white-space:nowrap">
+          ${price}${stores}
+          <div style="margin-top:6px">${availBadge(r.currentAvailability)}</div>
+        </td>
+      </tr>
+    </table>
+  </td>
+</tr>`;
+}
+
 function buildEmailHtml(items: RestockEvent[], geoLabel: string): string {
   const total = items.length;
+  const date  = new Date().toLocaleDateString('en-CA', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 
   // Group by category, preserving EMAIL_CATEGORIES order
   const grouped = new Map<EmailCategory, RestockEvent[]>(
@@ -114,59 +219,66 @@ function buildEmailHtml(items: RestockEvent[], geoLabel: string): string {
   );
   for (const item of items) grouped.get(categorizeEvent(item))!.push(item);
 
-  const s = {
-    wrap:   'font-family:sans-serif;max-width:820px;color:#222',
-    h2:     'margin:0 0 4px;color:#8b0000',
-    sub:    'margin:0 0 24px;color:#666;font-size:13px',
-    h3:     'margin:28px 0 6px;font-size:16px;border-bottom:2px solid #ddd;padding-bottom:4px',
-    count:  'font-weight:normal;color:#888;font-size:14px',
-    table:  'border-collapse:collapse;width:100%;font-size:13px;margin-bottom:4px',
-    th:     'background:#8b0000;color:#fff;padding:6px 10px;text-align:left;font-weight:600',
-    td:     'padding:6px 10px;border-bottom:1px solid #e8e8e8;vertical-align:top',
-    tdAlt:  'padding:6px 10px;border-bottom:1px solid #e8e8e8;vertical-align:top;background:#faf5f5',
-  };
-
-  const renderRow = (r: RestockEvent, alt: boolean): string => {
-    const td = alt ? s.tdAlt : s.td;
-    const tag = r.isNewArrival ? '🆕' : '✅';
-    const stores = r.currentStoreCount > 0
-      ? `${r.currentStoreCount} store${r.currentStoreCount !== 1 ? 's' : ''}${geoLabel}`
-      : `Online only`;
-    return `<tr>
-      <td style="${td}">${tag}&nbsp;<a href="${r.url}" style="color:#8b0000;text-decoration:none">${r.name}</a></td>
-      <td style="${td}" nowrap>$${r.price.toFixed(2)}</td>
-      <td style="${td}">${stores}</td>
-      <td style="${td}">${r.currentAvailability}</td>
-    </tr>`;
-  };
-
-  const sections = EMAIL_CATEGORIES
+  // Summary pills for the header bar
+  const pillHtml = EMAIL_CATEGORIES
     .filter(({ key }) => (grouped.get(key)?.length ?? 0) > 0)
     .map(({ key, emoji, label }) => {
+      const acc = CATEGORY_ACCENT[key];
+      const shortLabel = label.replace(/\s*\(.*?\)/, '');
+      return `<span style="display:inline-block;background:${acc};color:#fff;` +
+             `font-size:11px;font-weight:700;padding:3px 10px;border-radius:12px;` +
+             `margin:3px 4px 3px 0;white-space:nowrap">` +
+             `${emoji} ${shortLabel} (${grouped.get(key)!.length})</span>`;
+    }).join('');
+
+  // One section per non-empty category
+  const sectionsHtml = EMAIL_CATEGORIES
+    .filter(({ key }) => (grouped.get(key)?.length ?? 0) > 0)
+    .map(({ key, emoji, label }) => {
+      const acc   = CATEGORY_ACCENT[key];
       const group = grouped.get(key)!.sort((a, b) => b.price - a.price);
-      const rows = group.map((r, i) => renderRow(r, i % 2 === 1)).join('');
-      return `<h3 style="${s.h3}">${emoji} ${label} <span style="${s.count}">(${group.length})</span></h3>
-<table style="${s.table}">
-  <thead><tr>
-    <th style="${s.th}">Product</th>
-    <th style="${s.th}">Price</th>
-    <th style="${s.th}">Stores</th>
-    <th style="${s.th}">Availability</th>
-  </tr></thead>
-  <tbody>${rows}</tbody>
+      const cards = group.map((r) => renderCard(r, acc, geoLabel)).join('\n');
+
+      return `
+<!-- ${label} -->
+<table width="100%" cellpadding="0" cellspacing="0" style="margin-top:24px;border-radius:6px;overflow:hidden;border:1px solid #E8D5D5">
+  <tr>
+    <td style="background:${acc};padding:9px 16px;color:#fff;font-size:14px;font-weight:700">
+      ${emoji}&nbsp; ${label} <span style="opacity:0.75;font-weight:400">(${group.length})</span>
+    </td>
+  </tr>
+  <tr><td style="padding:0">
+    <table width="100%" cellpadding="0" cellspacing="0">${cards}</table>
+  </td></tr>
 </table>`;
     }).join('');
 
-  // Compact subject hint: "Red Wine (3), Spirits (1)"
-  const hintParts = EMAIL_CATEGORIES
-    .filter(({ key }) => (grouped.get(key)?.length ?? 0) > 0)
-    .map(({ emoji, label, key }) => `${emoji} ${label.replace(/\s*\(.*\)/, '')} (${grouped.get(key)!.length})`);
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="margin:0;padding:16px;background:#F8F0F0">
+<table width="100%" cellpadding="0" cellspacing="0" style="max-width:700px;margin:0 auto">
 
-  return `<div style="${s.wrap}">
-<h2 style="${s.h2}">📦 ${total} product${total !== 1 ? 's' : ''} now available at SAQ</h2>
-<p style="${s.sub}">${hintParts.join(' &nbsp;·&nbsp; ')}</p>
-${sections}
-</div>`;
+  <!-- Header -->
+  <tr><td style="background:#7B1B1B;border-radius:8px 8px 0 0;padding:20px 24px">
+    <div style="color:#fff;font-size:22px;font-weight:800;letter-spacing:-0.5px">🍷 SAQ Alert</div>
+    <div style="color:rgba(255,255,255,0.8);font-size:13px;margin-top:4px">
+      ${total} product${total !== 1 ? 's' : ''} now available &nbsp;·&nbsp; ${date}
+    </div>
+  </td></tr>
+
+  <!-- Category summary bar -->
+  <tr><td style="background:#F5ECEA;border:1px solid #E8D5D5;border-top:none;padding:10px 16px">
+    ${pillHtml}
+  </td></tr>
+
+  <!-- Sections -->
+  <tr><td style="padding:4px 0 24px">${sectionsHtml}</td></tr>
+
+  <!-- Footer -->
+  <tr><td style="text-align:center;padding:8px;color:#bbb;font-size:11px;font-family:sans-serif">
+    SAQ MCP &nbsp;·&nbsp; watch-all mode
+  </td></tr>
+
+</table>
+</body></html>`;
 }
 
 // ── Email notifications ───────────────────────────────────────────────────────
@@ -265,6 +377,15 @@ async function checkIndividual(
       };
 
       if (event) {
+        // Enrich with product details (available for individually watched products)
+        event.vintage    = product.vintage;
+        event.producer   = product.producer;
+        event.region     = product.region;
+        event.country    = product.country;
+        event.grape      = product.grape;
+        event.format     = product.format;
+        event.rating     = product.rating;
+        event.ratingCount = product.ratingCount;
         restocks.push(event);
         log(`  [NOW AVAILABLE] ${product.name} — ${event.currentStoreCount} store(s)${geoLabel ? ` near ${geoLabel}` : ''}`);
         if (notify) {
@@ -343,6 +464,15 @@ async function scanChunk(
           ? allStoreIds.filter((id) => localStoreIds.has(id)).length
           : undefined,
         availability: p.availability ?? '',
+        // Product details for richer email notifications
+        vintage: p.vintage,
+        producer: p.producer,
+        region: p.region,
+        country: p.country,
+        grape: p.grape,
+        format: p.format,
+        rating: p.rating,
+        ratingCount: p.ratingCount,
       };
     }
     page++;

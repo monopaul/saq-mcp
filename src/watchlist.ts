@@ -63,6 +63,15 @@ export interface CatalogEntry {
   storeCount: number;           // total stores across Quebec
   localStoreCount?: number;     // stores within location filter radius
   availability: string;
+  // Product details — saved at scan time for richer email notifications
+  vintage?: string;
+  producer?: string;
+  region?: string;
+  country?: string;
+  grape?: string;
+  format?: string;
+  rating?: number;
+  ratingCount?: number;
 }
 
 export interface CatalogSnapshot {
@@ -109,6 +118,15 @@ export interface RestockEvent {
   detectedAt: string;
   /** True when the product wasn't in the previous snapshot — it's a brand-new listing. */
   isNewArrival?: true;
+  // Product details for richer notifications (populated when available)
+  vintage?: string;
+  producer?: string;
+  region?: string;
+  country?: string;
+  grape?: string;
+  format?: string;
+  rating?: number;
+  ratingCount?: number;
 }
 
 /** Diff for an individually watched product (has full store ID list).
@@ -192,6 +210,14 @@ export function detectRestockFromCatalog(
     previousAvailability: prev.availability,
     currentAvailability: current.availability,
     detectedAt: new Date().toISOString(),
+    vintage: current.vintage,
+    producer: current.producer,
+    region: current.region,
+    country: current.country,
+    grape: current.grape,
+    format: current.format,
+    rating: current.rating,
+    ratingCount: current.ratingCount,
   };
 }
 
@@ -226,6 +252,14 @@ export function detectNewArrival(
     currentAvailability: current.availability,
     isNewArrival: true,
     detectedAt: new Date().toISOString(),
+    vintage: current.vintage,
+    producer: current.producer,
+    region: current.region,
+    country: current.country,
+    grape: current.grape,
+    format: current.format,
+    rating: current.rating,
+    ratingCount: current.ratingCount,
   };
 }
 

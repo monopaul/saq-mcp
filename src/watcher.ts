@@ -174,12 +174,15 @@ async function checkIndividual(
 // SAQ API hard-caps pagination at 10 000 products per filtered query.
 // Strategy:
 //   - Most categories are small enough to scan directly (includeUnavailable: true).
-//   - Wine is the only category that exceeds the limit: 27k+ products total.
+//   - Wine is the only category that exceeds the limit: ~14k unique products.
 //     It is split into four chunks that each stay under the limit:
-//       1. Available wines (online/in-store/lottery/coming soon): ~8k
-//       2. Sold-out French wines:                                 ~9.3k
-//       3. Sold-out non-French wines (all other countries):       ~4.4k
-//       4. Unavailable wines:                                     ~5.9k
+//       1. Purchasable / coming-soon wines:                       ~8k total_count (~5.8k unique)
+//       2. Sold-out French wines:                                 ~4.2k total_count (~3k unique)
+//       3. Sold-out non-French wines (all other countries):       ~1.7k total_count (~1.2k unique)
+//       4. Unavailable wines:                                     ~5.9k total_count (~4.3k unique)
+//
+// Note: total_count is inflated (~25–30%) because the Magento search index returns the same
+// SKU on multiple pages. The entries Map deduplicates these naturally.
 const ALL_CATEGORIES: ProductCategory[] = [
   'wine', 'spirits', 'beer', 'champagne-and-sparkling-wine',
   'cider', 'sake', 'aperitif', 'port-and-fortified-wine',
@@ -198,7 +201,6 @@ const WINE_COUNTRIES_NON_FRANCE: string[] = [
   'Spain', 'Switzerland', 'Tunisia', 'United States', 'Uruguay',
 ];
 
-const API_LIMIT = 9_900;
 const PAGE_SIZE = 48;
 
 async function scanChunk(
@@ -239,17 +241,21 @@ async function scanWine(
 ): Promise<CatalogSnapshot['entries']> {
   const entries: CatalogSnapshot['entries'] = {};
 
-  // Chunk 1: available wines (online/in-store/lottery/coming soon) — ~8k
+  // Chunk 1: purchasable or coming-soon wines — ~8k
+  // Explicit availability list to include 'Available shortly' (comingSoon), which is
+  // missed by the generic includeUnavailable: false filter.
   Object.assign(entries, await scanChunk(client, localStoreIds, {
-    category: 'wine', includeUnavailable: false,
+    category: 'wine',
+    availability: ['online', 'inStore', 'lotteryCurrently', 'lotterySoon', 'comingSoon'],
+    includeUnavailable: true,
   }));
 
-  // Chunk 2: sold-out French wines — ~9.3k (France alone is the largest single-country bucket)
+  // Chunk 2: sold-out French wines — ~4.2k (France is the largest single-country bucket)
   Object.assign(entries, await scanChunk(client, localStoreIds, {
     category: 'wine', availability: ['soldOut'], includeUnavailable: true, country: 'France',
   }));
 
-  // Chunk 3: sold-out non-French wines — ~4.4k
+  // Chunk 3: sold-out non-French wines — ~1.7k
   Object.assign(entries, await scanChunk(client, localStoreIds, {
     category: 'wine', availability: ['soldOut'], includeUnavailable: true,
     countries: WINE_COUNTRIES_NON_FRANCE,
@@ -305,31 +311,11 @@ async function scanCatalog(
     }
   }
 
-  log(`  Total from API: ${Object.keys(newEntries).length} unique products`);
-
-  // ── Carry-forward guard ──────────────────────────────────────────────────────
-  // The SAQ API returns inconsistent product counts between runs — some products
-  // are silently omitted on certain days (total_pages drifts). If we blindly replace
-  // the snapshot with whatever the API returned today, those missing products
-  // disappear from our baseline and reappear as "new arrivals" the next day.
-  // Fix: carry forward any product the scan missed, preserving its last-known state.
-  // This is safe because the detection logic requires prev availability rank > 0 to fire,
-  // so carried-forward products won't produce false alerts unless they genuinely restock.
-  // (Filter changes are excluded: local counts would be stale under a new filter.)
-  if (prevSnapshot && !isFirstRun && !filterChanged) {
-    let carriedForward = 0;
-    for (const [sku, prevEntry] of Object.entries(prevSnapshot.entries)) {
-      if (!newEntries[sku]) {
-        newEntries[sku] = prevEntry;
-        carriedForward++;
-      }
-    }
-    if (carriedForward > 0) {
-      log(`  Carried forward ${carriedForward} products not seen this scan (API jitter guard)`);
-    }
-  }
-
-  log(`  Total in snapshot: ${Object.keys(newEntries).length} unique products`);
+  // Note: the SAQ API's total_count is inflated because the same SKU can appear on multiple
+  // pages (Magento search index artifact). The actual unique product count (~14k wines) is
+  // ~70–75% of total_count. The Set-based deduplication in scanChunk already handles this
+  // correctly — no carry-forward guard is needed.
+  log(`  Total unique products from API: ${Object.keys(newEntries).length}`);
 
   const newSnapshot: CatalogSnapshot = {
     scannedAt: new Date().toISOString(),

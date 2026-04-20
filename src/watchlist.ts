@@ -148,14 +148,15 @@ export function detectRestock(
 /** Diff for a catalog-scan entry (only has store count, not full ID list).
  *  When a location filter was active at both scan times, uses localStoreCount.
  *
- *  Fires only when the product was genuinely unavailable before — meaning:
- *  - rank 0 availability (sold out / unavailable everywhere, NOT online) AND
- *  - 0 stores in the relevant scope
- *  AND is now actually available (rank > 0).
+ *  Fires ONLY when:
+ *  - The product was genuinely unavailable before (rank 0: sold out / unavailable) with 0 stores
+ *    in scope, AND
+ *  - Is now purchasable: rank 3 (Online or In store) with local stores, or available online
  *
  *  This prevents false alerts for:
- *  - Products "available online" that gain local stores (still available, just more so)
- *  - Products the API marks "Unavailable" but happens to carry store IDs */
+ *  - Products gaining more stores when they were already stocked locally
+ *  - Products that go from sold-out nationally to sold-out locally (no change for user)
+ *  - Products "Available shortly" becoming "In store" nationally with no local stores */
 export function detectRestockFromCatalog(
   sku: string,
   prev: CatalogEntry,
@@ -165,15 +166,19 @@ export function detectRestockFromCatalog(
   // Choose which count to compare based on whether we're in geo-filtered mode
   const prevCount = geoFiltered ? (prev.localStoreCount ?? prev.storeCount) : prev.storeCount;
   const currCount = geoFiltered ? (current.localStoreCount ?? current.storeCount) : current.storeCount;
-  const isPositiveAvailChange = isAvailabilityImprovement(prev.availability, current.availability);
 
-  // Product must have been genuinely unavailable (rank 0 = sold out / truly unavailable, not online)
-  // AND had no stores in scope, AND must now be actually available (rank > 0)
+  // Product must have been genuinely unavailable (rank 0 = sold out / truly unavailable)
+  // AND had no stores in scope
   const wasGenuinelyUnavailable = prevCount === 0 && availabilityRank(prev.availability) === 0;
-  const isNowAvailable = currCount > 0 && availabilityRank(current.availability) > 0;
-  const isFirstAvailability = wasGenuinelyUnavailable && isNowAvailable;
 
-  if (!isFirstAvailability && !isPositiveAvailChange) return null;
+  // Product must now be purchasable: Online or In store (rank 3)
+  // Online-only products have 0 local stores but are still purchasable
+  const isOnline = current.availability.includes('Online');
+  const isNowPurchasable = availabilityRank(current.availability) >= 3;
+  const isNowLocallyAvailable = currCount > 0 || isOnline;
+  const isNowAvailable = isNowPurchasable && isNowLocallyAvailable;
+
+  if (!wasGenuinelyUnavailable || !isNowAvailable) return null;
 
   return {
     sku,
@@ -224,10 +229,18 @@ export function detectNewArrival(
   };
 }
 
-/** Availability rank: 3 = in store / online, 2 = coming soon, 1 = lottery, 0 = unavailable/sold out */
+/** Availability rank: 3 = in store / online, 2 = coming soon / lottery soon, 1 = lottery, 0 = unavailable/sold out
+ *
+ * NOTE: The SAQ API returns multi-value availability attributes joined with ", " — e.g.
+ *   "Sold out, Products that are not available"
+ *   "Unavailable, Products that are not available"
+ *   "Online, In store"
+ * We must NOT use .includes('Available') here because it would match "not available".
+ * Use .includes('shortly') for "Available shortly" / "In a lottery shortly" instead.
+ */
 export function availabilityRank(a: string): number {
   if (a.includes('Online') || a.includes('In store')) return 3;
-  if (a.includes('shortly') || a.includes('Available')) return 2;
+  if (a.includes('shortly')) return 2;  // 'Available shortly', 'In a lottery shortly'
   if (a.includes('lottery') || a.includes('Lottery')) return 1;
   return 0;
 }

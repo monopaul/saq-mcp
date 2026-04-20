@@ -53,6 +53,122 @@ function sendNotification(title: string, body: string): void {
   } catch {}
 }
 
+// ── Email categorization ──────────────────────────────────────────────────────
+
+type EmailCategory =
+  | 'veryHighValue'
+  | 'sparklingAndChampagne'
+  | 'redWine'
+  | 'whiteWine'
+  | 'roseWine'
+  | 'otherWine'
+  | 'spirits'
+  | 'beerAndCider'
+  | 'misc';
+
+const EMAIL_CATEGORIES: Array<{ key: EmailCategory; emoji: string; label: string }> = [
+  { key: 'veryHighValue',         emoji: '💎', label: 'Very High Value (>$600)'      },
+  { key: 'sparklingAndChampagne', emoji: '🥂', label: 'Sparkling Wine & Champagne'   },
+  { key: 'redWine',               emoji: '🍷', label: 'Red Wine'                     },
+  { key: 'whiteWine',             emoji: '🍾', label: 'White Wine'                   },
+  { key: 'roseWine',              emoji: '🌹', label: 'Rosé Wine'                    },
+  { key: 'otherWine',             emoji: '🍇', label: 'Other Wine'                   },
+  { key: 'spirits',               emoji: '🥃', label: 'Spirits'                      },
+  { key: 'beerAndCider',          emoji: '🍺', label: 'Beer & Cider'                 },
+  { key: 'misc',                  emoji: '📦', label: 'Misc'                         },
+];
+
+/**
+ * Assign an email category based on price (checked first) then the product URL.
+ * SAQ URLs embed the category path, e.g. /en/products/wine/red-wine/... or
+ * /en/products/champagne-and-sparkling-wine/champagne/...
+ * Very High Value is mutually exclusive — products >$600 don't repeat in wine sections.
+ */
+function categorizeEvent(r: RestockEvent): EmailCategory {
+  if (r.price > 600) return 'veryHighValue';
+  const url = r.url.toLowerCase();
+  if (url.includes('/champagne-and-sparkling-wine/') || url.includes('/wine/sparkling-wine/')) {
+    return 'sparklingAndChampagne';
+  }
+  if (url.includes('/wine/red-wine/'))   return 'redWine';
+  if (url.includes('/wine/white-wine/')) return 'whiteWine';
+  if (url.includes('/wine/rose'))        return 'roseWine';
+  if (
+    url.includes('/wine/') ||
+    url.includes('/dessert-wine/') ||
+    url.includes('/port-and-fortified-wine/') ||
+    url.includes('/sake/') ||
+    url.includes('/aperitif/')
+  ) return 'otherWine';
+  if (url.includes('/spirit/')) return 'spirits';
+  if (url.includes('/beer/') || url.includes('/cider/')) return 'beerAndCider';
+  return 'misc';
+}
+
+function buildEmailHtml(items: RestockEvent[], geoLabel: string): string {
+  const total = items.length;
+
+  // Group by category, preserving EMAIL_CATEGORIES order
+  const grouped = new Map<EmailCategory, RestockEvent[]>(
+    EMAIL_CATEGORIES.map(({ key }) => [key, []]),
+  );
+  for (const item of items) grouped.get(categorizeEvent(item))!.push(item);
+
+  const s = {
+    wrap:   'font-family:sans-serif;max-width:820px;color:#222',
+    h2:     'margin:0 0 4px;color:#8b0000',
+    sub:    'margin:0 0 24px;color:#666;font-size:13px',
+    h3:     'margin:28px 0 6px;font-size:16px;border-bottom:2px solid #ddd;padding-bottom:4px',
+    count:  'font-weight:normal;color:#888;font-size:14px',
+    table:  'border-collapse:collapse;width:100%;font-size:13px;margin-bottom:4px',
+    th:     'background:#8b0000;color:#fff;padding:6px 10px;text-align:left;font-weight:600',
+    td:     'padding:6px 10px;border-bottom:1px solid #e8e8e8;vertical-align:top',
+    tdAlt:  'padding:6px 10px;border-bottom:1px solid #e8e8e8;vertical-align:top;background:#faf5f5',
+  };
+
+  const renderRow = (r: RestockEvent, alt: boolean): string => {
+    const td = alt ? s.tdAlt : s.td;
+    const tag = r.isNewArrival ? '🆕' : '✅';
+    const stores = r.currentStoreCount > 0
+      ? `${r.currentStoreCount} store${r.currentStoreCount !== 1 ? 's' : ''}${geoLabel}`
+      : `Online only`;
+    return `<tr>
+      <td style="${td}">${tag}&nbsp;<a href="${r.url}" style="color:#8b0000;text-decoration:none">${r.name}</a></td>
+      <td style="${td}" nowrap>$${r.price.toFixed(2)}</td>
+      <td style="${td}">${stores}</td>
+      <td style="${td}">${r.currentAvailability}</td>
+    </tr>`;
+  };
+
+  const sections = EMAIL_CATEGORIES
+    .filter(({ key }) => (grouped.get(key)?.length ?? 0) > 0)
+    .map(({ key, emoji, label }) => {
+      const group = grouped.get(key)!.sort((a, b) => b.price - a.price);
+      const rows = group.map((r, i) => renderRow(r, i % 2 === 1)).join('');
+      return `<h3 style="${s.h3}">${emoji} ${label} <span style="${s.count}">(${group.length})</span></h3>
+<table style="${s.table}">
+  <thead><tr>
+    <th style="${s.th}">Product</th>
+    <th style="${s.th}">Price</th>
+    <th style="${s.th}">Stores</th>
+    <th style="${s.th}">Availability</th>
+  </tr></thead>
+  <tbody>${rows}</tbody>
+</table>`;
+    }).join('');
+
+  // Compact subject hint: "Red Wine (3), Spirits (1)"
+  const hintParts = EMAIL_CATEGORIES
+    .filter(({ key }) => (grouped.get(key)?.length ?? 0) > 0)
+    .map(({ emoji, label, key }) => `${emoji} ${label.replace(/\s*\(.*\)/, '')} (${grouped.get(key)!.length})`);
+
+  return `<div style="${s.wrap}">
+<h2 style="${s.h2}">📦 ${total} product${total !== 1 ? 's' : ''} now available at SAQ</h2>
+<p style="${s.sub}">${hintParts.join(' &nbsp;·&nbsp; ')}</p>
+${sections}
+</div>`;
+}
+
 // ── Email notifications ───────────────────────────────────────────────────────
 
 interface EmailConfig {
@@ -386,18 +502,8 @@ async function scanCatalog(
 
   const emailItems = [...restocks, ...newArrivals];
   if (emailItems.length > 0) {
-    const rows = emailItems.sort((a, b) => b.price - a.price).map((r) =>
-      `<tr><td><a href="${r.url}">${r.name}</a></td><td>$${r.price.toFixed(2)}</td>` +
-      `<td>${r.currentStoreCount} store${r.currentStoreCount !== 1 ? 's' : ''}${geoLabel}</td>` +
-      `<td>${r.currentAvailability}</td></tr>`,
-    ).join('');
-    await sendEmail(
-      `SAQ: ${emailItems.length} product${emailItems.length !== 1 ? 's' : ''} now available`,
-      `<h2>📦 ${emailItems.length} product${emailItems.length !== 1 ? 's' : ''} now available at SAQ</h2>` +
-      `<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-family:sans-serif">` +
-      `<thead><tr><th>Product</th><th>Price</th><th>Stores</th><th>Availability</th></tr></thead>` +
-      `<tbody>${rows}</tbody></table>`,
-    );
+    const subject = `SAQ: ${emailItems.length} product${emailItems.length !== 1 ? 's' : ''} now available`;
+    await sendEmail(subject, buildEmailHtml(emailItems, geoLabel));
   }
 
   return [...newArrivals, ...restocks];

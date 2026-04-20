@@ -54,17 +54,31 @@ export function saveCtConfig(config: CtConfig): void {
   fs.writeFileSync(CT_CONFIG_PATH, JSON.stringify(config, null, 2));
 }
 
-/** Test credentials against the CT API. Returns true if valid. */
-export async function validateCtCredentials(username: string, password: string): Promise<boolean> {
+/**
+ * Test credentials against the CT API.
+ * Returns 'valid' | 'invalid' | 'unreachable'.
+ * 401 = bad credentials; 403 from CloudFront WAF = can't verify (save anyway);
+ * network error = unreachable.
+ */
+export async function validateCtCredentials(
+  username: string,
+  password: string,
+): Promise<'valid' | 'invalid' | 'unreachable'> {
   try {
     const params = new URLSearchParams({ q: 'GetWines', u: username, p: password, format: 'json', rows: '1' });
     const res = await fetch(`${CT_API}?${params}`, {
-      headers: { 'User-Agent': 'saq-mcp/1.0' },
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+        'Accept': 'application/json, text/plain, */*',
+      },
       signal: AbortSignal.timeout(10_000),
     });
-    return res.ok;
+    if (res.ok) return 'valid';
+    if (res.status === 401) return 'invalid';
+    // 403 from CloudFront WAF, 5xx, etc. — can't determine validity
+    return 'unreachable';
   } catch {
-    return false;
+    return 'unreachable';
   }
 }
 
@@ -148,7 +162,10 @@ async function fetchCtInfo(config: CtConfig, name: string, vintage?: string): Pr
   let wines: CtApiWine[];
   try {
     const res = await fetch(`${CT_API}?${params}`, {
-      headers: { 'User-Agent': 'saq-mcp/1.0' },
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+        'Accept': 'application/json, text/plain, */*',
+      },
       signal: AbortSignal.timeout(12_000),
     });
     if (!res.ok) return null;

@@ -769,16 +769,30 @@ server.tool(
     password: z.string().describe('Your CellarTracker password'),
   },
   async ({ username, password }) => {
-    const valid = await validateCtCredentials(username, password);
-    if (!valid) {
+    const result = await validateCtCredentials(username, password);
+    if (result === 'invalid') {
       return {
         content: [{
           type: 'text',
-          text: '❌ Could not authenticate with CellarTracker. Please check your username and password.',
+          text: '❌ CellarTracker rejected the credentials (HTTP 401). Please check your username and password.',
         }],
       };
     }
     saveCtConfig({ username, password });
+    if (result === 'unreachable') {
+      return {
+        content: [{
+          type: 'text',
+          text: [
+            '⚠️  CellarTracker credentials saved, but the API could not be reached to verify them',
+            '(the server returned a WAF/network error — this is common from non-browser clients).',
+            '',
+            'The credentials are stored and will be tried on the next watcher run.',
+            'If lookups fail in the email, double-check your username and password on cellartracker.com.',
+          ].join('\n'),
+        }],
+      };
+    }
     return {
       content: [{
         type: 'text',

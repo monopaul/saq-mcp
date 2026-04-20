@@ -125,8 +125,14 @@ export interface RestockEvent {
   country?: string;
   grape?: string;
   format?: string;
+  // SAQ on-site rating
   rating?: number;
   ratingCount?: number;
+  // CellarTracker community data (enriched at email-send time, not stored in snapshot)
+  ctScore?: number;
+  ctScoreCount?: number;
+  ctPrice?: number;
+  ctUrl?: string;
 }
 
 /** Diff for an individually watched product (has full store ID list).

@@ -9,6 +9,7 @@ const WATCHER_BIN = path.join(PROJECT_ROOT, 'dist', 'watcher.js');
 const INSTALL_SCRIPT = path.join(PROJECT_ROOT, 'install.sh');
 import { extractCredentials } from './credentials.js';
 import { SaqClient } from './saq-client.js';
+import { loadCtConfig, saveCtConfig, validateCtCredentials } from './cellartracker.js';
 import {
   loadWatchlist,
   saveWatchlist,
@@ -754,6 +755,69 @@ server.tool(
 
     return {
       content: [{ type: 'text', text: lines.join('\n') }],
+    };
+  },
+);
+
+// ── setup_cellartracker ───────────────────────────────────────────────────────
+server.tool(
+  'setup_cellartracker',
+  'Configure CellarTracker credentials so the daily email includes community scores and average prices. ' +
+  'Credentials are saved to ~/.saq-mcp/cellartracker.json and used only by the watcher daemon.',
+  {
+    username: z.string().describe('Your CellarTracker username'),
+    password: z.string().describe('Your CellarTracker password'),
+  },
+  async ({ username, password }) => {
+    const valid = await validateCtCredentials(username, password);
+    if (!valid) {
+      return {
+        content: [{
+          type: 'text',
+          text: '❌ Could not authenticate with CellarTracker. Please check your username and password.',
+        }],
+      };
+    }
+    saveCtConfig({ username, password });
+    return {
+      content: [{
+        type: 'text',
+        text: [
+          '✅ CellarTracker credentials saved.',
+          '',
+          'The next daily email will include:',
+          '  • Community score (CT 92/100)',
+          '  • Number of community tasting notes',
+          '  • Average community price (USD)',
+          '  • Link to the CellarTracker wine page',
+          '',
+          'Scores are looked up at email-send time (only for products that triggered an alert, ' +
+          'not the full catalog) and cached for 7 days.',
+        ].join('\n'),
+      }],
+    };
+  },
+);
+
+server.tool(
+  'cellartracker_status',
+  'Show whether CellarTracker enrichment is configured for the daily email.',
+  {},
+  async () => {
+    const config = loadCtConfig();
+    if (!config) {
+      return {
+        content: [{
+          type: 'text',
+          text: 'CellarTracker is not configured. Use `setup_cellartracker` to add your credentials.',
+        }],
+      };
+    }
+    return {
+      content: [{
+        type: 'text',
+        text: `✅ CellarTracker configured for user: ${config.username}`,
+      }],
     };
   },
 );

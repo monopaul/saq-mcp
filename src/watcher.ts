@@ -21,6 +21,7 @@ import * as os from 'os';
 import * as nodemailer from 'nodemailer';
 import { extractCredentials } from './credentials.js';
 import { SaqClient } from './saq-client.js';
+import { loadCtConfig, enrichWithCellarTracker } from './cellartracker.js';
 import { getStoreDirectory, getLocalStoreIds } from './stores.js';
 import type { ProductCategory } from './types.js';
 import {
@@ -138,15 +139,23 @@ function availBadge(avail: string): string {
          `padding:3px 8px;border-radius:4px;letter-spacing:0.3px;white-space:nowrap">${text}</span>`;
 }
 
-/** Render a rating as star glyphs + score. Returns '' if no rating. */
-function ratingHtml(rating: number | undefined, count: number | undefined): string {
-  if (!rating) return '';
-  const full  = Math.min(5, Math.round(rating));
-  const stars = '★'.repeat(full) + '☆'.repeat(5 - full);
-  const score = rating.toFixed(1);
-  const cnt   = count ? ` (${count})` : '';
-  return `<span style="color:#B8860B;font-size:12px">${stars}</span>` +
-         `<span style="color:#888;font-size:11px"> ${score}${cnt}</span>`;
+/** Render CellarTracker community score as a badge. Returns '' if no score. */
+function ctScoreHtml(score: number | undefined, count: number | undefined, ctUrl: string | undefined): string {
+  if (!score) return '';
+  // CT scores are 0–100; colour by tier
+  const color = score >= 93 ? '#7B1B1B' : score >= 88 ? '#9A6B00' : '#555';
+  const cnt   = count ? ` · ${count.toLocaleString()} notes` : '';
+  const inner = `<span style="font-weight:800;font-size:13px;color:${color}">CT ${score}</span>` +
+                `<span style="font-size:11px;color:#888">/100${cnt}</span>`;
+  return ctUrl
+    ? `<a href="${ctUrl}" style="text-decoration:none">${inner}</a>`
+    : inner;
+}
+
+/** Render CellarTracker average community price. Returns '' if unavailable. */
+function ctPriceHtml(price: number | undefined): string {
+  if (!price) return '';
+  return `<span style="font-size:11px;color:#888">CT avg <strong style="color:#555">$${price.toFixed(0)} USD</strong></span>`;
 }
 
 /** Render one product card as a table row. */
@@ -167,14 +176,20 @@ function renderCard(r: RestockEvent, accent: string, geoLabel: string): string {
     ? `<div style="color:#7A6A6A;font-size:12px;margin-top:3px">${meta1Parts.join(' &nbsp;·&nbsp; ')}</div>`
     : '';
 
-  // ── Metadata line 2: grape · format · rating ───────────────────────────────
+  // ── Metadata line 2: grape · format ────────────────────────────────────────
   const meta2Parts: string[] = [];
   if (r.grape)  meta2Parts.push(r.grape);
   if (r.format) meta2Parts.push(r.format);
-  const meta2Text = meta2Parts.join(' &nbsp;·&nbsp; ');
-  const ratingStr = ratingHtml(r.rating, r.ratingCount);
-  const meta2 = (meta2Text || ratingStr)
-    ? `<div style="color:#999;font-size:11px;margin-top:2px">${[meta2Text, ratingStr].filter(Boolean).join(' &nbsp;&nbsp; ')}</div>`
+  const meta2 = meta2Parts.length
+    ? `<div style="color:#999;font-size:11px;margin-top:2px">${meta2Parts.join(' &nbsp;·&nbsp; ')}</div>`
+    : '';
+
+  // ── CellarTracker score + community price ───────────────────────────────────
+  const ctScore = ctScoreHtml(r.ctScore, r.ctScoreCount, r.ctUrl);
+  const ctPrice = ctPriceHtml(r.ctPrice);
+  const ctLine  = [ctScore, ctPrice].filter(Boolean).join(' &nbsp;&nbsp; ');
+  const ctHtml  = ctLine
+    ? `<div style="margin-top:4px">${ctLine}</div>`
     : '';
 
   // ── Price ───────────────────────────────────────────────────────────────────
@@ -196,7 +211,7 @@ function renderCard(r: RestockEvent, accent: string, geoLabel: string): string {
         <td style="vertical-align:top;padding-right:12px">
           <div style="margin-bottom:5px">${tag}</div>
           <div style="margin-bottom:2px">${nameHtml}</div>
-          ${meta1}${meta2}
+          ${meta1}${meta2}${ctHtml}
           <div style="margin-top:7px">${link}</div>
         </td>
         <td width="130" style="vertical-align:top;text-align:right;white-space:nowrap">
@@ -632,6 +647,10 @@ async function scanCatalog(
 
   const emailItems = [...restocks, ...newArrivals];
   if (emailItems.length > 0) {
+    // Enrich with CellarTracker community score + price (only for alert products, not full catalog)
+    const ctConfig = loadCtConfig();
+    if (ctConfig) await enrichWithCellarTracker(emailItems, ctConfig, log);
+
     const subject = `SAQ: ${emailItems.length} product${emailItems.length !== 1 ? 's' : ''} now available`;
     await sendEmail(subject, buildEmailHtml(emailItems, geoLabel));
   }

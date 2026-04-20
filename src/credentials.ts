@@ -6,6 +6,7 @@ import type { SaqCredentials } from './types.js';
 
 const CREDENTIALS_PATH = path.join(os.homedir(), '.saq-mcp', 'credentials.json');
 const CATALOG_HOST = 'catalog-service.adobe.io';
+const CREDENTIALS_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 const KNOWN_ENV_ID = '2ce24571-9db9-4786-84a9-5f129257ccbb';
 const KNOWN_STORE_CODE = 'main_website_store';
@@ -16,8 +17,15 @@ export function loadCachedCredentials(): SaqCredentials | null {
   try {
     if (fs.existsSync(CREDENTIALS_PATH)) {
       const raw = fs.readFileSync(CREDENTIALS_PATH, 'utf-8');
-      const creds = JSON.parse(raw) as SaqCredentials;
-      if (creds.apiKey && creds.environmentId) return creds;
+      const creds = JSON.parse(raw) as SaqCredentials & { fetchedAt?: number };
+      if (!creds.apiKey || !creds.environmentId) return null;
+      // Expire after 24 hours — SAQ API keys are short-lived
+      const age = Date.now() - (creds.fetchedAt ?? 0);
+      if (age > CREDENTIALS_TTL_MS) {
+        process.stderr.write('[saq-mcp] Cached credentials expired — re-extracting...\n');
+        return null;
+      }
+      return creds;
     }
   } catch {}
   return null;
@@ -77,12 +85,13 @@ export async function extractCredentials(): Promise<SaqCredentials> {
     );
   }
 
-  const creds: SaqCredentials = {
+  const creds: SaqCredentials & { fetchedAt: number } = {
     apiKey,
     environmentId: KNOWN_ENV_ID,
     storeCode: KNOWN_STORE_CODE,
     storeViewCode: KNOWN_STORE_VIEW,
     websiteCode: KNOWN_WEBSITE_CODE,
+    fetchedAt: Date.now(),
   };
 
   saveCredentials(creds);

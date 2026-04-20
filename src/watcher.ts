@@ -21,7 +21,7 @@ import * as os from 'os';
 import * as nodemailer from 'nodemailer';
 import { extractCredentials } from './credentials.js';
 import { SaqClient } from './saq-client.js';
-import { loadCtConfig, enrichWithCellarTracker } from './cellartracker.js';
+import { loadCtConfig, enrichWithCellarTracker, getUsdCadRate } from './cellartracker.js';
 import { getStoreDirectory, getLocalStoreIds } from './stores.js';
 import type { ProductCategory } from './types.js';
 import {
@@ -152,14 +152,18 @@ function ctScoreHtml(score: number | undefined, count: number | undefined, ctUrl
     : inner;
 }
 
-/** Render CellarTracker average community price. Returns '' if unavailable. */
-function ctPriceHtml(price: number | undefined): string {
+/** Render CellarTracker average community price. Converts to CAD if a rate is provided. */
+function ctPriceHtml(price: number | undefined, usdCadRate?: number | null): string {
   if (!price) return '';
+  if (usdCadRate) {
+    const cad = price * usdCadRate;
+    return `<span style="font-size:11px;color:#888">CT avg <strong style="color:#555">$${cad.toFixed(0)} CAD</strong></span>`;
+  }
   return `<span style="font-size:11px;color:#888">CT avg <strong style="color:#555">$${price.toFixed(0)} USD</strong></span>`;
 }
 
 /** Render one product card as a table row. */
-function renderCard(r: RestockEvent, accent: string, geoLabel: string): string {
+function renderCard(r: RestockEvent, accent: string, geoLabel: string, usdCadRate?: number | null): string {
   // ── Tag pill ────────────────────────────────────────────────────────────────
   const tagBg   = r.isNewArrival ? '#4A235A' : '#1A5C38';
   const tagText = r.isNewArrival ? 'NEW ARRIVAL' : 'NOW AVAILABLE';
@@ -186,7 +190,7 @@ function renderCard(r: RestockEvent, accent: string, geoLabel: string): string {
 
   // ── CellarTracker score + community price ───────────────────────────────────
   const ctScore = ctScoreHtml(r.ctScore, r.ctScoreCount, r.ctUrl);
-  const ctPrice = ctPriceHtml(r.ctPrice);
+  const ctPrice = ctPriceHtml(r.ctPrice, usdCadRate);
   const ctLine  = [ctScore, ctPrice].filter(Boolean).join(' &nbsp;&nbsp; ');
   const ctHtml  = ctLine
     ? `<div style="margin-top:4px">${ctLine}</div>`
@@ -224,7 +228,7 @@ function renderCard(r: RestockEvent, accent: string, geoLabel: string): string {
 </tr>`;
 }
 
-function buildEmailHtml(items: RestockEvent[], geoLabel: string): string {
+function buildEmailHtml(items: RestockEvent[], geoLabel: string, usdCadRate?: number | null): string {
   const total = items.length;
   const date  = new Date().toLocaleDateString('en-CA', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 
@@ -252,7 +256,7 @@ function buildEmailHtml(items: RestockEvent[], geoLabel: string): string {
     .map(({ key, emoji, label }) => {
       const acc   = CATEGORY_ACCENT[key];
       const group = grouped.get(key)!.sort((a, b) => b.price - a.price);
-      const cards = group.map((r) => renderCard(r, acc, geoLabel)).join('\n');
+      const cards = group.map((r) => renderCard(r, acc, geoLabel, usdCadRate)).join('\n');
 
       return `
 <!-- ${label} -->
@@ -651,8 +655,12 @@ async function scanCatalog(
     const ctConfig = loadCtConfig();
     if (ctConfig) await enrichWithCellarTracker(emailItems, ctConfig, log);
 
+    // Fetch USD → CAD rate for price conversion (graceful fallback to USD if unavailable)
+    const usdCadRate = await getUsdCadRate();
+    if (usdCadRate) log(`  [FX] USD/CAD rate: ${usdCadRate.toFixed(4)}`);
+
     const subject = `SAQ: ${emailItems.length} product${emailItems.length !== 1 ? 's' : ''} now available`;
-    await sendEmail(subject, buildEmailHtml(emailItems, geoLabel));
+    await sendEmail(subject, buildEmailHtml(emailItems, geoLabel, usdCadRate));
   }
 
   return [...newArrivals, ...restocks];

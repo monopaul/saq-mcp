@@ -16,8 +16,11 @@ import * as os from 'os';
 const DATA_DIR         = path.join(os.homedir(), '.saq-mcp');
 const CT_CONFIG_PATH   = path.join(DATA_DIR, 'cellartracker.json');
 const CT_CACHE_PATH    = path.join(DATA_DIR, 'ct-cache.json');
+const FX_CACHE_PATH    = path.join(DATA_DIR, 'fx-cache.json');
 const CT_CACHE_TTL_MS  = 7 * 24 * 60 * 60 * 1000; // 7 days
+const FX_CACHE_TTL_MS  = 20 * 60 * 60 * 1000;     // 20 hours (rate refreshes once per trading day)
 const CT_API           = 'https://www.cellartracker.com/api.asp';
+const FX_API           = 'https://api.frankfurter.app/latest?from=USD&to=CAD';
 const CT_REQUEST_DELAY = 300; // ms between API calls — be polite
 
 export interface CtConfig {
@@ -184,6 +187,46 @@ async function fetchCtInfo(config: CtConfig, name: string, vintage?: string): Pr
     ctPrice,
     ctUrl: iWine ? `https://www.cellartracker.com/wine.asp?iWine=${iWine}` : undefined,
   };
+}
+
+// ── USD → CAD exchange rate ───────────────────────────────────────────────────
+
+interface FxCache {
+  rate: number;    // USD → CAD multiplier
+  date: string;    // rate date from the API (YYYY-MM-DD, i.e. previous trading day)
+  fetchedAt: number;
+}
+
+/**
+ * Fetch the most recent USD → CAD exchange rate from frankfurter.app (ECB data,
+ * free, no auth). Result is cached for 20 hours so repeat runs within the day
+ * make no network request. Returns null on any error.
+ */
+export async function getUsdCadRate(): Promise<number | null> {
+  // Try cache first
+  try {
+    if (fs.existsSync(FX_CACHE_PATH)) {
+      const cached = JSON.parse(fs.readFileSync(FX_CACHE_PATH, 'utf-8')) as FxCache;
+      if (Date.now() - cached.fetchedAt < FX_CACHE_TTL_MS) return cached.rate;
+    }
+  } catch {}
+
+  try {
+    const res = await fetch(FX_API, {
+      headers: { 'User-Agent': 'saq-mcp/1.0' },
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (!res.ok) return null;
+    const json = await res.json() as { rates?: { CAD?: number }; date?: string };
+    const rate = json.rates?.CAD;
+    if (!rate) return null;
+    const cache: FxCache = { rate, date: json.date ?? '', fetchedAt: Date.now() };
+    if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(FX_CACHE_PATH, JSON.stringify(cache));
+    return rate;
+  } catch {
+    return null;
+  }
 }
 
 // ── Public enrichment API ────────────────────────────────────────────────────

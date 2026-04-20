@@ -55,12 +55,16 @@ function ctScoreHtml(score, count, ctUrl) {
   return ctUrl ? `<a href="${ctUrl}" style="text-decoration:none">${inner}</a>` : inner;
 }
 
-function ctPriceHtml(price) {
+function ctPriceHtml(price, usdCadRate) {
   if (!price) return '';
+  if (usdCadRate) {
+    const cad = price * usdCadRate;
+    return `<span style="font-size:11px;color:#888">CT avg <strong style="color:#555">$${cad.toFixed(0)} CAD</strong></span>`;
+  }
   return `<span style="font-size:11px;color:#888">CT avg <strong style="color:#555">$${price.toFixed(0)} USD</strong></span>`;
 }
 
-function renderCard(r, accent, geoLabel) {
+function renderCard(r, accent, geoLabel, usdCadRate) {
   const tagBg   = r.isNewArrival ? '#4A235A' : '#1A5C38';
   const tagText = r.isNewArrival ? 'NEW ARRIVAL' : 'NOW AVAILABLE';
   const tag = `<span style="background:${tagBg};color:#fff;font-size:9px;font-weight:800;padding:2px 7px;border-radius:3px;letter-spacing:0.8px">${tagText}</span>`;
@@ -71,7 +75,7 @@ function renderCard(r, accent, geoLabel) {
   const meta2Parts = [r.grape, r.format].filter(Boolean);
   const meta2 = meta2Parts.length ? `<div style="color:#999;font-size:11px;margin-top:2px">${meta2Parts.join(' &nbsp;·&nbsp; ')}</div>` : '';
   const ctScore = ctScoreHtml(r.ctScore, r.ctScoreCount, r.ctUrl);
-  const ctPrice = ctPriceHtml(r.ctPrice);
+  const ctPrice = ctPriceHtml(r.ctPrice, usdCadRate);
   const ctLine  = [ctScore, ctPrice].filter(Boolean).join(' &nbsp;&nbsp; ');
   const ctHtml  = ctLine ? `<div style="margin-top:4px">${ctLine}</div>` : '';
   const price = `<div style="font-size:22px;font-weight:800;color:#7B1B1B;line-height:1.1">$${r.price.toFixed(2)}</div>`;
@@ -97,7 +101,7 @@ function renderCard(r, accent, geoLabel) {
 </tr>`;
 }
 
-function buildEmailHtml(items, geoLabel) {
+function buildEmailHtml(items, geoLabel, usdCadRate) {
   const total = items.length;
   const date  = new Date().toLocaleDateString('en-CA', { weekday:'long', year:'numeric', month:'long', day:'numeric' });
   const grouped = new Map(EMAIL_CATEGORIES.map(({key}) => [key, []]));
@@ -116,7 +120,7 @@ function buildEmailHtml(items, geoLabel) {
     .map(({key, emoji, label}) => {
       const acc   = CATEGORY_ACCENT[key];
       const group = grouped.get(key).sort((a,b) => b.price - a.price);
-      const cards = group.map(r => renderCard(r, acc, geoLabel)).join('\n');
+      const cards = group.map(r => renderCard(r, acc, geoLabel, usdCadRate)).join('\n');
       return `
 <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:24px;border-radius:6px;overflow:hidden;border:1px solid #E8D5D5">
   <tr><td style="background:${acc};padding:9px 16px;color:#fff;font-size:14px;font-weight:700">
@@ -151,6 +155,22 @@ const SAMPLES = [
   { sku:'00801234', name:'Barolo Riserva Vigna Rionda', vintage:'2017', price:649, url:'https://www.saq.com/en/products/wine/red-wine/piemonte-rouge/barolo/00801234', isNewArrival:true, currentStoreCount:1, currentAvailability:'In store', previousAvailability:'', previousStoreCount:0, newStoreIds:[], availabilityChanged:true, detectedAt:new Date().toISOString(), producer:'Giacomo Conterno', region:'Barolo, Piedmont', country:'Italy', grape:'Nebbiolo', format:'750 ml', ctScore:98, ctScoreCount:134, ctPrice:580, ctUrl:'https://www.cellartracker.com/wine.asp?iWine=801234' },
 ];
 
-const html = buildEmailHtml(SAMPLES, geoLabel);
-fs.writeFileSync('/tmp/saq-email-preview.html', html);
-console.log('Preview written to /tmp/saq-email-preview.html');
+async function main() {
+  let usdCadRate = null;
+  try {
+    const res = await fetch('https://api.frankfurter.app/latest?from=USD&to=CAD',
+      { headers: { 'User-Agent': 'saq-mcp/1.0' }, signal: AbortSignal.timeout(8_000) });
+    if (res.ok) {
+      const json = await res.json();
+      usdCadRate = json?.rates?.CAD ?? null;
+    }
+  } catch {}
+  if (usdCadRate) console.log(`USD/CAD rate: ${usdCadRate.toFixed(4)}`);
+  else console.log('USD/CAD rate unavailable — falling back to USD display');
+
+  const html = buildEmailHtml(SAMPLES, geoLabel, usdCadRate);
+  fs.writeFileSync('/tmp/saq-email-preview.html', html);
+  console.log('Preview written to /tmp/saq-email-preview.html');
+}
+
+main();
